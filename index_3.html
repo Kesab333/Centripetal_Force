@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Coaster Assembly - Smooth Track Curve</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #controls-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 320px;
+            padding: 18px 22px;
+            background: rgba(22, 26, 33, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 14px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+            color: #f0f4f8;
+            user-select: none;
+            z-index: 100;
+        }
+        #controls-panel h2 {
+            margin: 0 0 16px 0;
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: #e2e8f0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 8px;
+        }
+        .control-group {
+            margin-bottom: 18px;
+        }
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+        .label-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .label-title {
+            font-weight: 500;
+            color: #cbd5e1;
+        }
+        .label-value {
+            font-family: monospace;
+            font-size: 13px;
+            color: #38bdf8;
+            font-weight: 600;
+        }
+        input[type=range] {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]:focus {
+            outline: none;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: #334155;
+            border-radius: 3px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: #38bdf8;
+            cursor: pointer;
+            -webkit-appearance: none;
+            margin-top: -6px;
+            box-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+            transition: transform 0.1s ease, background-color 0.1s ease;
+        }
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+            background: #7dd3fc;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div id="canvas-container"></div>
+
+    <div id="controls-panel">
+        <h2>Coaster Adjustments</h2>
+        
+        <div class="control-group">
+            <div class="label-container">
+                <span class="label-title">1. Loop Radius</span>
+                <span id="radius-val" class="label-value">1.35 m</span>
+            </div>
+            <input type="range" id="radius-slider" min="1.35" max="3.20" step="0.05" value="1.35">
+        </div>
+
+        <div class="control-group">
+            <div class="label-container">
+                <span class="label-title">2. Full Track Position</span>
+                <span id="height-val" class="label-value">0.57 m (Start)</span>
+            </div>
+            <input type="range" id="height-slider" min="0.0" max="1.0" step="0.001" value="0.0">
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let hulkCar, trackPath, getTrackFrame;
+        
+        let currentTrackGroup = null;
+
+        const railHeight = 0.16;
+        const railRadius = 0.022;
+        const halfGauge = 0.22;
+        const plateTopY = 0.06;
+        const minY = plateTopY + 0.15;
+
+        let currentRadius = 1.35;
+        let currentCarPosRatio = 0.0;
+
+        init();
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xd0d5dd);
+
+            camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(6.5, 3.8, 11.5);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.2;
+            container.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.target.set(1.5, 2.0, 0.0);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.08;
+            controls.update();
+
+            // Lighting
+            const ambient = new THREE.AmbientLight(0xffffff, 0.75);
+            scene.add(ambient);
+
+            const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            mainLight.position.set(6, 15, 10);
+            mainLight.castShadow = true;
+            scene.add(mainLight);
+
+            const fillLight = new THREE.DirectionalLight(0x99aacc, 0.45);
+            fillLight.position.set(-4, 2, 8);
+            scene.add(fillLight);
+
+            // Ground & Base Plate
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x4a505b, roughness: 0.6, metalness: 0.2 });
+            const ground = new THREE.Mesh(new THREE.BoxGeometry(28, 0.25, 10), groundMat);
+            ground.position.set(1.5, -0.25, 0);
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            const plateMat = new THREE.MeshStandardMaterial({ color: 0x1e222b, roughness: 0.3, metalness: 0.8 });
+            const plate = new THREE.Mesh(new THREE.BoxGeometry(23, 0.08, 4.2), plateMat);
+            plate.position.set(1.5, 0.02, 0);
+            plate.receiveShadow = true;
+            scene.add(plate);
+
+            // Build Car Model
+            hulkCar = buildHulkCoasterCar();
+            hulkCar.scale.set(1.1, 1.1, 1.1);
+            scene.add(hulkCar);
+
+            // Build Smooth Track
+            rebuildTrack(currentRadius);
+
+            setupUIControls();
+
+            window.addEventListener('resize', onWindowResize);
+            animate();
+        }
+
+        function rebuildTrack(R) {
+            if (currentTrackGroup) {
+                scene.remove(currentTrackGroup);
+                currentTrackGroup.traverse(child => {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) {
+                        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                        else child.material.dispose();
+                    }
+                });
+            }
+
+            currentTrackGroup = new THREE.Group();
+
+            const loopX = 5.8;
+            const zFront = 0.50;
+            const zBack = -0.50;
+
+            const trackPoints = [];
+
+            const xStart = -8.5;
+            const xPeak = -2.2;
+            const xFlatStart = 3.6;
+            const hillHeight = 3.84;
+            const hillSteps = 110;
+
+            // Quintic Smoothstep Hill curve generation (Zero slope and zero second derivative at transition)
+            for (let i = 0; i <= hillSteps; i++) {
+                let t = i / hillSteps;
+                let x = xStart + (xFlatStart - xStart) * t;
+                let y = minY;
+
+                if (x <= xPeak) {
+                    let u = (x - xStart) / (xPeak - xStart);
+                    u = Math.max(0, Math.min(1, u));
+                    let smooth = u * u * u * (u * (u * 6 - 15) + 10);
+                    y = minY + hillHeight * smooth;
+                } else {
+                    let u = (x - xPeak) / (xFlatStart - xPeak);
+                    u = Math.max(0, Math.min(1, u));
+                    let smooth = 1.0 - u * u * u * (u * (u * 6 - 15) + 10);
+                    y = minY + hillHeight * smooth;
+                }
+                trackPoints.push(new THREE.Vector3(x, y, zFront));
+            }
+
+            // Flat run-up to loop
+            const transSteps = 25;
+            for (let i = 1; i <= transSteps; i++) {
+                let t = i / transSteps;
+                let x = xFlatStart + (loopX - xFlatStart) * t;
+                trackPoints.push(new THREE.Vector3(x, minY, zFront));
+            }
+
+            // Inversion Loop
+            const loopSteps = 120;
+            for (let i = 1; i <= loopSteps; i++) {
+                let t = i / loopSteps;
+                let angle = t * Math.PI * 2;
+                let x = loopX + R * Math.sin(angle);
+                let y = (minY + R) - R * Math.cos(angle);
+                let z = zFront + (zBack - zFront) * t;
+                trackPoints.push(new THREE.Vector3(x, y, z));
+            }
+
+            // Loop Exit
+            const exitSteps = 30;
+            const exitEndX = Math.max(12.2, loopX + R + 3.0);
+            for (let i = 1; i <= exitSteps; i++) {
+                let t = i / exitSteps;
+                let x = loopX + (exitEndX - loopX) * t;
+                trackPoints.push(new THREE.Vector3(x, minY, zBack));
+            }
+
+            trackPath = new THREE.CatmullRomCurve3(trackPoints, false, 'catmullrom', 0.1);
+
+            getTrackFrame = function(u) {
+                u = Math.max(0.0, Math.min(1.0, u));
+                const p = trackPath.getPointAt(u);
+                const T = trackPath.getTangentAt(u).normalize();
+
+                const radIn = new THREE.Vector3(loopX - p.x, (minY + R) - p.y, 0);
+                const distToLoopCenter = radIn.length();
+                radIn.normalize();
+
+                let w = 0;
+                if (p.x >= loopX - R - 0.3 && p.x <= loopX + R + 0.3 && p.y >= minY - 0.02) {
+                    w = Math.max(0, Math.min(1, 1.0 - Math.abs(distToLoopCenter - R) / (R * 0.4)));
+                }
+
+                const worldUp = new THREE.Vector3(0, 1, 0);
+                const targetUp = new THREE.Vector3()
+                    .addScaledVector(worldUp, 1 - w)
+                    .addScaledVector(radIn, w);
+
+                if (targetUp.length() < 0.001 || Math.abs(targetUp.dot(T)) > 0.95) {
+                    targetUp.copy(worldUp);
+                }
+
+                const B = new THREE.Vector3().crossVectors(T, targetUp).normalize();
+                const N = new THREE.Vector3().crossVectors(B, T).normalize();
+
+                return { p, T, N, B };
+            };
+
+            const sampleCount = 450;
+            const spineRadius = 0.052; 
+            const tieRadius = 0.011;   
+
+            const spinePoints = [];
+            const leftRailPoints = [];
+            const rightRailPoints = [];
+
+            for (let i = 0; i <= sampleCount; i++) {
+                const u = i / sampleCount;
+                const frame = getTrackFrame(u);
+
+                spinePoints.push(frame.p);
+
+                const leftPos = frame.p.clone()
+                    .addScaledVector(frame.N, railHeight)
+                    .addScaledVector(frame.B, halfGauge);
+
+                const rightPos = frame.p.clone()
+                    .addScaledVector(frame.N, railHeight)
+                    .addScaledVector(frame.B, -halfGauge);
+
+                leftRailPoints.push(leftPos);
+                rightRailPoints.push(rightPos);
+            }
+
+            const trackMaterial = new THREE.MeshStandardMaterial({
+                color: 0xd91818,
+                metalness: 0.45,
+                roughness: 0.22
+            });
+
+            const spineCurve = new THREE.CatmullRomCurve3(spinePoints);
+            const leftRailCurve = new THREE.CatmullRomCurve3(leftRailPoints);
+            const rightRailCurve = new THREE.CatmullRomCurve3(rightRailPoints);
+
+            const spineGeo = new THREE.TubeGeometry(spineCurve, sampleCount, spineRadius, 8, false);
+            const spineMesh = new THREE.Mesh(spineGeo, trackMaterial);
+            spineMesh.castShadow = true;
+            spineMesh.receiveShadow = true;
+            currentTrackGroup.add(spineMesh);
+
+            const leftRailGeo = new THREE.TubeGeometry(leftRailCurve, sampleCount, railRadius, 6, false);
+            const leftRailMesh = new THREE.Mesh(leftRailGeo, trackMaterial);
+            leftRailMesh.castShadow = true;
+            leftRailMesh.receiveShadow = true;
+            currentTrackGroup.add(leftRailMesh);
+
+            const rightRailGeo = new THREE.TubeGeometry(rightRailCurve, sampleCount, railRadius, 6, false);
+            const rightRailMesh = new THREE.Mesh(rightRailGeo, trackMaterial);
+            rightRailMesh.castShadow = true;
+            rightRailMesh.receiveShadow = true;
+            currentTrackGroup.add(rightRailMesh);
+
+            // Instanced Strut Ties
+            const tieStep = 3; 
+            const totalTies = Math.floor(sampleCount / tieStep) + 1;
+            const totalStruts = totalTies * 3;
+
+            const baseStrutGeo = new THREE.CylinderGeometry(tieRadius, tieRadius, 1.0, 6);
+            const strutInstancedMesh = new THREE.InstancedMesh(baseStrutGeo, trackMaterial, totalStruts);
+            strutInstancedMesh.castShadow = true;
+
+            const dummyObj = new THREE.Object3D();
+            const yAxis = new THREE.Vector3(0, 1, 0);
+            let strutCount = 0;
+
+            function addStrutTransform(pA, pB) {
+                const dir = new THREE.Vector3().subVectors(pB, pA);
+                const len = dir.length();
+                const pos = new THREE.Vector3().addVectors(pA, pB).multiplyScalar(0.5);
+
+                dummyObj.position.copy(pos);
+                dummyObj.scale.set(1, len, 1);
+                dummyObj.quaternion.setFromUnitVectors(yAxis, dir.normalize());
+                dummyObj.updateMatrix();
+
+                strutInstancedMesh.setMatrixAt(strutCount++, dummyObj.matrix);
+            }
+
+            for (let i = 0; i <= sampleCount; i += tieStep) {
+                const S = spinePoints[i];
+                const L = leftRailPoints[i];
+                const R_pt = rightRailPoints[i];
+
+                addStrutTransform(L, R_pt);
+                addStrutTransform(S, L);
+                addStrutTransform(S, R_pt);
+            }
+            strutInstancedMesh.instanceMatrix.needsUpdate = true;
+            currentTrackGroup.add(strutInstancedMesh);
+
+            // Support Pillars
+            const pillarMat = new THREE.MeshStandardMaterial({ color: 0x4a5260, metalness: 0.7, roughness: 0.4 });
+            const pillarParams = [0.02, 0.08, 0.14, 0.20, 0.27, 0.35, 0.85, 0.98];
+
+            pillarParams.forEach(u => {
+                const trackPt = trackPath.getPointAt(u);
+                const pillarHeight = Math.max(0.05, trackPt.y - plateTopY);
+
+                const pillar = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.045, 0.058, pillarHeight, 10),
+                    pillarMat
+                );
+                pillar.position.set(trackPt.x, pillarHeight / 2 + plateTopY, trackPt.z);
+                pillar.castShadow = true;
+                pillar.receiveShadow = true;
+                currentTrackGroup.add(pillar);
+            });
+
+            scene.add(currentTrackGroup);
+
+            updateVehiclePos(currentCarPosRatio);
+        }
+
+        function updateVehiclePos(ratio) {
+            currentCarPosRatio = Math.max(0.0, Math.min(1.0, ratio));
+
+            const frame = getTrackFrame(currentCarPosRatio);
+            const railSurfaceOffset = railHeight + railRadius;
+
+            hulkCar.position.copy(frame.p).addScaledVector(frame.N, railSurfaceOffset);
+
+            const rotMatrix = new THREE.Matrix4();
+            rotMatrix.makeBasis(frame.T, frame.N, frame.B);
+            hulkCar.quaternion.setFromRotationMatrix(rotMatrix);
+
+            const heightLabel = document.getElementById('height-val');
+            const currentY = hulkCar.position.y;
+            
+            let sectionName = "Track";
+            if (currentCarPosRatio < 0.04) {
+                sectionName = "Start";
+            } else if (currentCarPosRatio > 0.14 && currentCarPosRatio < 0.22) {
+                sectionName = "Hill Peak";
+            } else if (currentCarPosRatio > 0.38 && currentCarPosRatio < 0.45) {
+                sectionName = "Loop Entry";
+            } else if (currentCarPosRatio > 0.58 && currentCarPosRatio < 0.68) {
+                sectionName = "Loop Inversion";
+            } else if (currentCarPosRatio > 0.78 && currentCarPosRatio < 0.85) {
+                sectionName = "Loop Exit";
+            } else if (currentCarPosRatio > 0.96) {
+                sectionName = "Track End";
+            }
+
+            heightLabel.textContent = `${currentY.toFixed(2)} m (${sectionName})`;
+        }
+
+        function setupUIControls() {
+            const radiusSlider = document.getElementById('radius-slider');
+            const radiusLabel = document.getElementById('radius-val');
+            const heightSlider = document.getElementById('height-slider');
+
+            radiusSlider.addEventListener('input', (e) => {
+                currentRadius = parseFloat(e.target.value);
+                radiusLabel.textContent = `${currentRadius.toFixed(2)} m`;
+                rebuildTrack(currentRadius);
+            });
+
+            heightSlider.addEventListener('input', (e) => {
+                const ratio = parseFloat(e.target.value);
+                updateVehiclePos(ratio);
+            });
+        }
+
+        function createCustomWheelGeometry() {
+            const pts = [];
+            pts.push(new THREE.Vector2(0.0, -0.04));
+            pts.push(new THREE.Vector2(0.025, -0.04));
+            pts.push(new THREE.Vector2(0.025, -0.032));
+            pts.push(new THREE.Vector2(0.055, -0.032));
+            pts.push(new THREE.Vector2(0.058, -0.022));
+            pts.push(new THREE.Vector2(0.042, -0.008));
+            pts.push(new THREE.Vector2(0.042, 0.008));
+            pts.push(new THREE.Vector2(0.058, 0.022));
+            pts.push(new THREE.Vector2(0.055, 0.032));
+            pts.push(new THREE.Vector2(0.025, 0.032));
+            pts.push(new THREE.Vector2(0.025, 0.04));
+            pts.push(new THREE.Vector2(0.0, 0.04));
+
+            return new THREE.LatheGeometry(pts, 24);
+        }
+
+        function buildHulkCoasterCar() {
+            const carGroup = new THREE.Group();
+
+            const greenBodyMat = new THREE.MeshStandardMaterial({ color: 0x2e8b46, roughness: 0.35, metalness: 0.1 });
+            const pinkTrimMat = new THREE.MeshStandardMaterial({ color: 0xeb1b7f, roughness: 0.35, metalness: 0.05 });
+            const yellowSeatMat = new THREE.MeshStandardMaterial({ color: 0xeed010, roughness: 0.32, metalness: 0.05 });
+            const darkTubMat = new THREE.MeshStandardMaterial({ color: 0x181c1a, roughness: 0.5, metalness: 0.3 });
+            const silverMetalMat = new THREE.MeshStandardMaterial({ color: 0xc4cbd4, roughness: 0.2, metalness: 0.85 });
+            const darkMetalMat = new THREE.MeshStandardMaterial({ color: 0x1f2328, roughness: 0.4, metalness: 0.8 });
+            const bogieHousingMat = new THREE.MeshStandardMaterial({ color: 0x2b322a, roughness: 0.5, metalness: 0.6 });
+            const wheelBodyMat = new THREE.MeshStandardMaterial({ color: 0x111315, roughness: 0.3, metalness: 0.7 });
+
+            const wheelGeo = createCustomWheelGeometry();
+            const wheelRadius = 0.045;
+
+            // LAYER 0: WHEEL BOGIES
+            [-0.32, 0.32].forEach(x => {
+                [-halfGauge, halfGauge].forEach(z => {
+                    const bogie = new THREE.Group();
+                    bogie.position.set(x, wheelRadius, z);
+
+                    const mountBlock = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.04, 0.06), darkMetalMat);
+                    mountBlock.position.set(0, 0.025, 0);
+                    bogie.add(mountBlock);
+
+                    const outerBox = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.05, 0.025), bogieHousingMat);
+                    outerBox.position.set(0, 0.01, z > 0 ? 0.035 : -0.035);
+                    bogie.add(outerBox);
+
+                    [-0.085, 0.085].forEach(wx => {
+                        const wheelMesh = new THREE.Mesh(wheelGeo, wheelBodyMat);
+                        wheelMesh.rotation.x = Math.PI / 2;
+                        wheelMesh.position.set(wx, 0, 0);
+
+                        if (z < 0) {
+                            wheelMesh.rotation.x = -Math.PI / 2;
+                        }
+
+                        const capGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.01, 12);
+                        const capMesh = new THREE.Mesh(capGeo, silverMetalMat);
+                        capMesh.rotation.x = Math.PI / 2;
+                        capMesh.position.set(wx, 0, z > 0 ? 0.038 : -0.038);
+
+                        bogie.add(wheelMesh, capMesh);
+                    });
+
+                    carGroup.add(bogie);
+                });
+            });
+
+            // LAYER 1: CHASSIS BASE & AXLES
+            const chassisFrame = new THREE.Group();
+            const basePlate = new THREE.Mesh(new THREE.BoxGeometry(1.10, 0.04, 0.46), darkMetalMat);
+            basePlate.position.set(-0.02, 0.08, 0);
+            chassisFrame.add(basePlate);
+
+            [-0.32, 0.32].forEach(x => {
+                const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, halfGauge * 2 + 0.06, 12), silverMetalMat);
+                axle.rotation.x = Math.PI / 2;
+                axle.position.set(x, 0.06, 0);
+                chassisFrame.add(axle);
+            });
+            carGroup.add(chassisFrame);
+
+            // LAYER 2: BODY SHELL ASSEMBLY
+            const bodyGroup = new THREE.Group();
+
+            const floorMesh = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.04, 0.42), darkTubMat);
+            floorMesh.position.set(-0.025, 0.10, 0);
+            bodyGroup.add(floorMesh);
+
+            const frontShape = new THREE.Shape();
+            frontShape.moveTo(0.15, 0.12);
+            frontShape.lineTo(0.48, 0.12);
+            frontShape.quadraticCurveTo(0.52, 0.14, 0.50, 0.22);
+            frontShape.quadraticCurveTo(0.44, 0.34, 0.28, 0.34);
+            frontShape.lineTo(0.15, 0.34);
+
+            const frontGeo = new THREE.ExtrudeGeometry(frontShape, { depth: 0.42, bevelEnabled: true, bevelSize: 0.01, bevelThickness: 0.01 });
+            frontGeo.center();
+            const frontMesh = new THREE.Mesh(frontGeo, greenBodyMat);
+            frontMesh.position.set(0.325, 0.23, 0);
+            bodyGroup.add(frontMesh);
+
+            const rearShape = new THREE.Shape();
+            rearShape.moveTo(-0.55, 0.12);
+            rearShape.lineTo(-0.25, 0.12);
+            rearShape.lineTo(-0.25, 0.42);
+            rearShape.quadraticCurveTo(-0.45, 0.43, -0.52, 0.38);
+            rearShape.quadraticCurveTo(-0.57, 0.26, -0.55, 0.12);
+
+            const rearGeo = new THREE.ExtrudeGeometry(rearShape, { depth: 0.42, bevelEnabled: true, bevelSize: 0.01, bevelThickness: 0.01 });
+            rearGeo.center();
+            const rearMesh = new THREE.Mesh(rearGeo, greenBodyMat);
+            rearMesh.position.set(-0.40, 0.27, 0);
+            bodyGroup.add(rearMesh);
+
+            [-0.195, 0.195].forEach(z => {
+                const sideShape = new THREE.Shape();
+                sideShape.moveTo(-0.25, 0.12);
+                sideShape.lineTo(0.15, 0.12);
+                sideShape.lineTo(0.15, 0.34);
+                sideShape.quadraticCurveTo(-0.05, 0.24, -0.25, 0.42);
+
+                const sideGeo = new THREE.ExtrudeGeometry(sideShape, { depth: 0.03, bevelEnabled: false });
+                const sideMesh = new THREE.Mesh(sideGeo, greenBodyMat);
+                sideMesh.position.set(0, 0, z > 0 ? z - 0.03 : z);
+                bodyGroup.add(sideMesh);
+            });
+
+            carGroup.add(bodyGroup);
+
+            // LAYER 3: SEAT PADDING
+            const seatProfile = new THREE.Shape();
+            seatProfile.moveTo(-0.18, 0.16);
+            seatProfile.lineTo(-0.18, 0.38);
+            seatProfile.lineTo(-0.14, 0.38);
+            seatProfile.lineTo(-0.14, 0.30);
+            seatProfile.quadraticCurveTo(-0.15, 0.22, -0.10, 0.17);
+            seatProfile.quadraticCurveTo(0.00, 0.17, 0.10, 0.17);
+            seatProfile.closePath();
+
+            const seatGeo = new THREE.ExtrudeGeometry(seatProfile, {
+                depth: 0.13,
+                bevelEnabled: true,
+                bevelSegments: 2,
+                steps: 1,
+                bevelSize: 0.005,
+                bevelThickness: 0.005
+            });
+            seatGeo.center();
+
+            [-0.085, 0.085].forEach(z => {
+                const seatMesh = new THREE.Mesh(seatGeo, yellowSeatMat);
+                seatMesh.rotation.z = -0.15;
+                seatMesh.position.set(-0.05, 0.29, z);
+                carGroup.add(seatMesh);
+            });
+
+            // LAYER 4: PINK TUBE RIM
+            const pinkPoints = [
+                new THREE.Vector3(-0.53, 0.34,  0.00),
+                new THREE.Vector3(-0.51, 0.35,  0.222),
+                new THREE.Vector3(-0.25, 0.44,  0.222),
+                new THREE.Vector3(-0.05, 0.31,  0.222),
+                new THREE.Vector3( 0.15, 0.35,  0.222),
+                new THREE.Vector3( 0.46, 0.27,  0.222),
+                new THREE.Vector3( 0.50, 0.25,  0.00),
+                new THREE.Vector3( 0.46, 0.27, -0.222),
+                new THREE.Vector3( 0.15, 0.35, -0.222),
+                new THREE.Vector3(-0.05, 0.31, -0.222),
+                new THREE.Vector3(-0.25, 0.44, -0.222),
+                new THREE.Vector3(-0.51, 0.35, -0.222)
+            ];
+
+            const pinkCurve = new THREE.CatmullRomCurve3(pinkPoints, true, 'centripetal', 0.10);
+            const pinkGeo = new THREE.TubeGeometry(pinkCurve, 120, 0.020, 12, true);
+            const pinkMesh = new THREE.Mesh(pinkGeo, pinkTrimMat);
+            carGroup.add(pinkMesh);
+
+            // LAYER 5: LAP RESTRAINT BAR
+            const safetyBarCurve = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(-0.02, 0.24, -0.20),
+                new THREE.Vector3(-0.02, 0.42, -0.19),
+                new THREE.Vector3(-0.02, 0.44,  0.00),
+                new THREE.Vector3(-0.02, 0.42,  0.19),
+                new THREE.Vector3(-0.02, 0.24,  0.20)
+            ]);
+            const safetyBarMat = new THREE.MeshStandardMaterial({ color: 0x1f2328, roughness: 0.3, metalness: 0.8 });
+            const safetyBar = new THREE.Mesh(new THREE.TubeGeometry(safetyBarCurve, 24, 0.014, 10, false), safetyBarMat);
+            carGroup.add(safetyBar);
+
+            // LAYER 6: REAR HANDLE BAR
+            const yellowHandleCurve = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(-0.48, 0.42, -0.18),
+                new THREE.Vector3(-0.48, 0.62, -0.16),
+                new THREE.Vector3(-0.48, 0.64,  0.00),
+                new THREE.Vector3(-0.48, 0.62,  0.16),
+                new THREE.Vector3(-0.48, 0.42,  0.18)
+            ]);
+            const yellowHandleMat = new THREE.MeshStandardMaterial({ color: 0xf3ca10, roughness: 0.3, metalness: 0.2 });
+            const yellowHandleBar = new THREE.Mesh(new THREE.TubeGeometry(yellowHandleCurve, 24, 0.013, 10, false), yellowHandleMat);
+            carGroup.add(yellowHandleBar);
+
+            carGroup.castShadow = true;
+            return carGroup;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
